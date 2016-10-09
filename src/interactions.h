@@ -98,7 +98,7 @@ void scatterRay(
 	{
 		newDir = calculateRandomDirectionInHemisphere(normal, rng);
 	}
-	pathSegment.color *= m.color * glm::abs(glm::dot(newDir, normal));
+	pathSegment.color *= m.color;
 	pathSegment.remainingBounces--;
 	pathSegment.ray.direction = newDir;
 	pathSegment.ray.origin = intersect + normal * 0.001f;

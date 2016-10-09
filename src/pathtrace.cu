@@ -18,8 +18,8 @@
 
 #define ERRORCHECK 1
 #define SORTING 0
-#define CACHING 1
-#define EFFICIENT_COMPACTION 1
+#define CACHING 0
+#define EFFICIENT_COMPACTION 2
 #define PROFILING 1
 
 #define FILENAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
@@ -484,7 +484,7 @@ void pathtrace(uchar4 *pbo, int frame, int iter) {
 			);
 		// TODO: should be based off stream compaction results.
 		#if EFFICIENT_COMPACTION == 0
-		iterationComplete = depth > 5;
+		iterationComplete = depth > 8;
 		#endif
 		#if EFFICIENT_COMPACTION == 1
 		num_paths = StreamCompaction::Efficient::compact(num_paths, dev_paths, dev_compactBuffer);
@@ -508,7 +508,7 @@ void pathtrace(uchar4 *pbo, int frame, int iter) {
 	cudaEventElapsedTime(&milliseconds, start, stop);
 	totaltime += milliseconds;
 	steps++;
-	if (steps == 2000) {
+	if (steps == 500) {
 		printf("totaltime: %f, average execution time: %f\n", totaltime, totaltime / steps);
 	}
 	#endif
