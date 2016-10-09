@@ -5,6 +5,7 @@
 #include <thrust/random.h>
 #include <thrust/remove.h>
 #include <thrust/device_ptr.h>
+#include <stream_compaction/efficient.h>
 
 #include "sceneStructs.h"
 #include "scene.h"
@@ -17,7 +18,9 @@
 
 #define ERRORCHECK 1
 #define SORTING 0
-#define CACHING 0
+#define CACHING 1
+#define EFFICIENT_COMPACTION 1
+#define PROFILING 1
 
 #define FILENAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 #define checkCUDAError(msg) checkCUDAErrorFn(msg, FILENAME, __LINE__)
@@ -77,8 +80,15 @@ static Material * dev_materials = NULL;
 static PathSegment * dev_paths = NULL;
 static ShadeableIntersection * dev_intersections = NULL;
 static ShadeableIntersection * dev_cache = NULL;
+static PathSegment * dev_compactBuffer = NULL;
 // TODO: static variables for device memory, any extra info you need, etc
 // ...
+
+#if PROFILING
+static cudaEvent_t start, stop;
+static double totaltime;
+static long steps;
+#endif
 
 void pathtraceInit(Scene *scene) {
 	hst_scene = scene;
@@ -104,6 +114,16 @@ void pathtraceInit(Scene *scene) {
 	cudaMalloc(&dev_cache, pixelcount * sizeof(ShadeableIntersection));
 	cudaMemset(dev_cache, 0, pixelcount * sizeof(ShadeableIntersection));
 
+	cudaMalloc(&dev_compactBuffer, pixelcount * sizeof(PathSegment));
+	cudaMemset(dev_compactBuffer, 0, pixelcount * sizeof(PathSegment));
+
+	#if PROFILING
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+	steps = 0;
+	totaltime = 0;
+	#endif
+
 	checkCUDAError("pathtraceInit");
 }
 
@@ -115,6 +135,7 @@ void pathtraceFree() {
 	cudaFree(dev_intersections);
 	// TODO: clean up any extra device memory you created
 	cudaFree(dev_cache);
+	cudaFree(dev_compactBuffer);
 	checkCUDAError("pathtraceFree");
 }
 
@@ -229,6 +250,15 @@ __global__ void computeIntersections(
 	}
 }
 
+// Add the current iteration's output to the overall image
+__device__ void gather(glm::vec3 * image, PathSegment iterationPath)
+{
+	if (iterationPath.remainingBounces <= 0)
+	{
+		image[iterationPath.pixelIndex] += iterationPath.color;
+	}
+}
+
 // LOOK: "fake" shader demonstrating what you might do with the info in
 // a ShadeableIntersection, as well as how to use thrust's random number
 // generator. Observe that since the thrust random number generator basically
@@ -244,12 +274,15 @@ __global__ void shadeFakeMaterial(
 	, ShadeableIntersection * shadeableIntersections
 	, PathSegment * pathSegments
 	, Material * materials
+	, glm::vec3 * image
 	)
 {
 	int idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx < num_paths)
 	{
 		ShadeableIntersection intersection = shadeableIntersections[idx];
+		if (pathSegments[idx].remainingBounces <= 0)
+			return;
 		if (intersection.t > 0.0f) { // if the intersection exists...
 			// Set up the RNG
 			// LOOK: this is how you use thrust's RNG! Please look at
@@ -283,6 +316,7 @@ __global__ void shadeFakeMaterial(
 			pathSegments[idx].color = glm::vec3(0.0f);
 			pathSegments[idx].remainingBounces = 0;
 		}
+		gather(image, pathSegments[idx]);
 	}
 }
 
@@ -360,13 +394,18 @@ void pathtrace(uchar4 *pbo, int frame, int iter) {
 
 	// TODO: perform one iteration of path tracing
 
+	#if PROFILING
+	cudaEventRecord(start);
+	#endif
+
 	generateRayFromCamera << <blocksPerGrid2d, blockSize2d >> >(cam, iter, traceDepth, dev_paths);
 	checkCUDAError("generate camera ray");
 
 	int depth = 0;
 	PathSegment* dev_path_end = dev_paths + pixelcount;
 	int num_paths = dev_path_end - dev_paths;
-	int total_paths = num_paths;
+
+	//int total_paths = num_paths;
 
 	// --- PathSegment Tracing Stage ---
 	// Shoot ray into scene, bounce between objects, push shading chunks
@@ -432,9 +471,7 @@ void pathtrace(uchar4 *pbo, int frame, int iter) {
 
 		//Sorting
 		#if SORTING
-		printf("Here1");
 		thrust::sort_by_key(thrust::device, dev_intersections, dev_intersections + num_paths, dev_paths, OBCmp());
-		printf("Here");
 		#endif
 
 		shadeFakeMaterial << <numblocksPathSegmentTracing, blockSize1d >> > (
@@ -442,17 +479,39 @@ void pathtrace(uchar4 *pbo, int frame, int iter) {
 			num_paths,
 			dev_intersections,
 			dev_paths,
-			dev_materials
+			dev_materials,
+			dev_image
 			);
 		// TODO: should be based off stream compaction results.
+		#if EFFICIENT_COMPACTION == 0
+		iterationComplete = depth > 5;
+		#endif
+		#if EFFICIENT_COMPACTION == 1
+		num_paths = StreamCompaction::Efficient::compact(num_paths, dev_paths, dev_compactBuffer);
+		iterationComplete = num_paths <= 0;
+		#endif
+		#if EFFICIENT_COMPACTION == 2
 		PathSegment* last = thrust::partition(thrust::device, dev_paths, dev_paths + num_paths, checkCompletedRays());
 		num_paths = last - dev_paths;
 		iterationComplete = num_paths <= 0;
+		#endif
 	}
 
 	// Assemble this iteration and apply it to the image
-	dim3 numBlocksPixels = (pixelcount + blockSize1d - 1) / blockSize1d;
-	finalGather << <numBlocksPixels, blockSize1d >> >(total_paths, dev_image, dev_paths);
+	//dim3 numBlocksPixels = (pixelcount + blockSize1d - 1) / blockSize1d;
+	//finalGather << <numBlocksPixels, blockSize1d >> >(total_paths, dev_image, dev_paths);
+
+	#if PROFILING
+	cudaEventRecord(stop);
+	cudaEventSynchronize(stop);
+	float milliseconds = 0;
+	cudaEventElapsedTime(&milliseconds, start, stop);
+	totaltime += milliseconds;
+	steps++;
+	if (steps == 2000) {
+		printf("totaltime: %f, average execution time: %f\n", totaltime, totaltime / steps);
+	}
+	#endif
 
 	///////////////////////////////////////////////////////////////////////////
 
