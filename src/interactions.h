@@ -78,31 +78,27 @@ void scatterRay(
     // calculateRandomDirectionInHemisphere defined above.
 	thrust::uniform_real_distribution<float> u01(0, 1);
 	glm::vec3 newDir;
-	if (m.hasReflective > 0.0f) {
+	if (u01(rng) < m.hasReflective) {
 		newDir = glm::reflect(pathSegment.ray.direction, normal);
 		pathSegment.color *= m.specular.color;
 	}
-	else if (m.hasRefractive > 0.0f) {
+	else if (u01(rng) < m.hasRefractive) {
 		float cosTheta = glm::dot(pathSegment.ray.direction, normal);
 		float R0 = powf(((1 - m.indexOfRefraction) / (1 + m.indexOfRefraction)), 2);
 		float R = R0 + (1 - R0)*powf((1 - glm::abs(cosTheta)), 5);
 		
-		if (u01(rng) < R) {
+
 			if (cosTheta < 0)
 				newDir = glm::refract(pathSegment.ray.direction, normal, 1.0f/m.indexOfRefraction);
 			else
 				newDir = glm::refract(pathSegment.ray.direction, normal, m.indexOfRefraction);
-		}
-		else {
-			newDir = glm::reflect(pathSegment.ray.direction, normal);
-		}
 		pathSegment.color *= m.specular.color;
 	}
 	else
 	{
 		newDir = calculateRandomDirectionInHemisphere(normal, rng);
 	}
-	pathSegment.color *= m.color;
+	pathSegment.color *= m.color * glm::abs(glm::dot(newDir, normal));
 	pathSegment.remainingBounces--;
 	pathSegment.ray.direction = newDir;
 	pathSegment.ray.origin = intersect + normal * 0.001f;

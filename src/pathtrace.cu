@@ -17,7 +17,7 @@
 
 #define ERRORCHECK 1
 #define SORTING 0
-#define CACHING 1
+#define CACHING 0
 
 #define FILENAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 #define checkCUDAError(msg) checkCUDAErrorFn(msg, FILENAME, __LINE__)
@@ -138,11 +138,21 @@ __global__ void generateRayFromCamera(Camera cam, int iter, int traceDepth, Path
 		segment.ray.origin = cam.position;
 		segment.color = glm::vec3(1.0f, 1.0f, 1.0f);
 
-		// TODO: implement antialiasing by jittering the ray
+		#if CACHING
 		segment.ray.direction = glm::normalize(cam.view
 			- cam.right * cam.pixelLength.x * ((float)x - (float)cam.resolution.x * 0.5f)
 			- cam.up * cam.pixelLength.y * ((float)y - (float)cam.resolution.y * 0.5f)
 			);
+		#else
+		thrust::default_random_engine rng = makeSeededRandomEngine(iter, index, 0);
+		thrust::uniform_real_distribution<float> u01(0, 1);
+
+		// TODO: implement antialiasing by jittering the ray
+		segment.ray.direction = glm::normalize(cam.view
+			- cam.right * cam.pixelLength.x * ((float)x + u01(rng) - 0.5f - (float)cam.resolution.x * 0.5f) 
+			- cam.up * cam.pixelLength.y * ((float)y + u01(rng) - 0.5f - (float)cam.resolution.y * 0.5f)
+			);
+		#endif
 
 		segment.pixelIndex = index;
 		segment.remainingBounces = traceDepth;
