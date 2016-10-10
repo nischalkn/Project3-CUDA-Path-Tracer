@@ -67,7 +67,7 @@ Refraction was implemented using using Schlick's approximation. The following is
 ## Antialiasing
 Antialiasing was implemented by jittering the initial ray from the camera. Antialiasing is disabled when `CACHING` is enabled.
 
-![](img/aa.png)
+![](img/AA.png)
 
 ## Efficient Stream compaction
 Rays are terminated and removed from the pool when the number of remaining bounces are zero. This is done using stream compaction. An efficient scan is used to compact the rays. The performance of this implementation vs `thrust::partition` is as follows
